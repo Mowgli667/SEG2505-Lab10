@@ -1,5 +1,7 @@
 # Pipeline CI/CD – SEG2505 Lab 10
-# Déclenché à chaque push : tests unitaires, puis construction de l'APK
+# Déclenché à chaque push :
+#   1. tests unitaires (JUnit) et analyse statique (lint) en parallèle
+#   2. construction de l'APK, seulement si les deux réussissent
 # (Gradle télécharge seul le JDK 25 demandé par gradle-daemon-jvm.properties)
 version: 2.1
 
@@ -11,9 +13,9 @@ executors:
     environment:
       GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.workers.max=2"
 
-jobs:
-  tests-unitaires:
-    executor: android-exec
+commands:
+  preparer-gradle:
+    description: "Récupère le code et le cache Gradle"
     steps:
       - checkout
       - restore_cache:
@@ -21,8 +23,14 @@ jobs:
       - run:
           name: Rendre gradlew exécutable
           command: chmod +x gradlew
+
+jobs:
+  tests-unitaires:
+    executor: android-exec
+    steps:
+      - preparer-gradle
       - run:
-          name: Lancer les tests unitaires
+          name: Lancer les tests unitaires (JUnit)
           command: ./gradlew testDebugUnitTest
       - save_cache:
           key: gradle-{{ checksum "gradle/libs.versions.toml" }}-{{ checksum "app/build.gradle.kts" }}
@@ -34,15 +42,24 @@ jobs:
           path: app/build/reports/tests
           destination: rapports-tests
 
+  analyse-lint:
+    executor: android-exec
+    steps:
+      - preparer-gradle
+      - run:
+          name: Analyse statique du code (Android Lint)
+          command: ./gradlew lintDebug
+      - store_artifacts:
+          path: app/build/reports
+          destination: rapports-lint
+
   construire-apk:
     executor: android-exec
     steps:
-      - checkout
-      - restore_cache:
-          key: gradle-{{ checksum "gradle/libs.versions.toml" }}-{{ checksum "app/build.gradle.kts" }}
+      - preparer-gradle
       - run:
           name: Construire l'APK de debug
-          command: chmod +x gradlew && ./gradlew assembleDebug
+          command: ./gradlew assembleDebug
       - store_artifacts:
           path: app/build/outputs/apk/debug
           destination: apk
@@ -51,6 +68,8 @@ workflows:
   tests-et-build:
     jobs:
       - tests-unitaires
+      - analyse-lint
       - construire-apk:
           requires:
             - tests-unitaires
+            - analyse-lint

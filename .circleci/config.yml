@@ -1,0 +1,56 @@
+# Pipeline CI/CD – SEG2505 Lab 10
+# Déclenché à chaque push : tests unitaires, puis construction de l'APK
+# (Gradle télécharge seul le JDK 25 demandé par gradle-daemon-jvm.properties)
+version: 2.1
+
+executors:
+  android-exec:
+    docker:
+      - image: cimg/android:2024.01   # JDK 17 + SDK Android
+    resource_class: large
+    environment:
+      GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.workers.max=2"
+
+jobs:
+  tests-unitaires:
+    executor: android-exec
+    steps:
+      - checkout
+      - restore_cache:
+          key: gradle-{{ checksum "gradle/libs.versions.toml" }}-{{ checksum "app/build.gradle.kts" }}
+      - run:
+          name: Rendre gradlew exécutable
+          command: chmod +x gradlew
+      - run:
+          name: Lancer les tests unitaires
+          command: ./gradlew testDebugUnitTest
+      - save_cache:
+          key: gradle-{{ checksum "gradle/libs.versions.toml" }}-{{ checksum "app/build.gradle.kts" }}
+          paths:
+            - ~/.gradle
+      - store_test_results:
+          path: app/build/test-results
+      - store_artifacts:
+          path: app/build/reports/tests
+          destination: rapports-tests
+
+  construire-apk:
+    executor: android-exec
+    steps:
+      - checkout
+      - restore_cache:
+          key: gradle-{{ checksum "gradle/libs.versions.toml" }}-{{ checksum "app/build.gradle.kts" }}
+      - run:
+          name: Construire l'APK de debug
+          command: chmod +x gradlew && ./gradlew assembleDebug
+      - store_artifacts:
+          path: app/build/outputs/apk/debug
+          destination: apk
+
+workflows:
+  tests-et-build:
+    jobs:
+      - tests-unitaires
+      - construire-apk:
+          requires:
+            - tests-unitaires
